@@ -1,2 +1,4 @@
 pyinstaller>=6.0
 winotify>=1.1.0
+nepdate-core==0.1.0b1
+nepdate-patro==0.1.0b1
