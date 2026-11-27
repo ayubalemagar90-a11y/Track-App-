@@ -110,8 +110,8 @@ DEFAULTS = {
     "school_closures": [],
     "reminders_enabled": True,
     "startup_enabled": False,
-    "github_repo": "",
-    "calendar_language": "en",
+    "github_repo": "ayubalemagar90-a11y/Track-App-",
+    "calendar_language": "ne",
 }
 
 def load_data():
@@ -120,6 +120,23 @@ def load_data():
             data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
             merged = DEFAULTS.copy()
             merged.update(data if isinstance(data, dict) else {})
+            # Replace the short timetable entered in the earlier app with the original
+            # DailyFit plan; leave any other custom schedules untouched.
+            previous_short_plan = [
+                "09:00 | School",
+                "16:30 | Rest and snack",
+                "17:00 | Study",
+                "19:00 | Dinner",
+                "20:00 | Revision",
+                "21:30 | Sleep",
+            ]
+            saved_schedule = merged.get("weekday_schedule")
+            if isinstance(saved_schedule, list) and [
+                str(line).strip() for line in saved_schedule if str(line).strip()
+            ] == previous_short_plan:
+                merged["weekday_schedule"] = DEFAULTS["weekday_schedule"].copy()
+            if not merged.get("github_repo"):
+                merged["github_repo"] = DEFAULTS["github_repo"]
             return merged
         except (OSError, ValueError):
             pass
@@ -184,7 +201,10 @@ class DailyFit(tk.Tk):
         self.current_page = "Dashboard"
         self.current_schedule_type = "weekday_schedule"
         self.schedule_editor = None
-        self.calendar_month = date.today().replace(day=1)
+        saved_calendar_month = DATA.get("calendar_view_bs", {})
+        self.calendar_bs_year = saved_calendar_month.get("year")
+        self.calendar_bs_month = saved_calendar_month.get("month")
+        self.selected_calendar_ad = None
         self.month_days = []
         self.calendar_loading = False
         self.reminded = set()
@@ -559,119 +579,241 @@ class DailyFit(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def page_calendar(self):
-        self.label(self.page_host, "Bikram Sambat date, festivals and public-holiday references. Internet is needed to refresh.",
-                   10, self.theme["muted"]).pack(anchor="w", pady=(0, 10))
-        self.calendar_status = self.label(self.page_host, "Loading Nepali Patro…", 12, self.theme["accent"], True)
-        self.calendar_status.pack(anchor="w", pady=4)
+        self.label(
+            self.page_host,
+            "नेपालि पात्रो • Bikram Sambat dates, tithi, festivals and holidays",
+            10, self.theme["muted"]
+        ).pack(anchor="w", pady=(0, 8))
+        self.calendar_status = self.label(
+            self.page_host, "नेपाली पात्रो लोड हुँदैछ…", 11, self.theme["accent"], True
+        )
+        self.calendar_status.pack(anchor="w", pady=3)
         nav = tk.Frame(self.page_host, bg=self.theme["bg"])
         nav.pack(fill="x", pady=4)
-        self.button(nav, "◀ Previous month", lambda: self.change_calendar_month(-1)).pack(side="left")
-        self.month_title = self.label(nav, self.calendar_month.strftime("%B %Y"), 12, self.theme["fg"], True)
+        self.button(nav, "◀ अघिल्लो महिना", lambda: self.change_calendar_month(-1)).pack(side="left")
+        self.month_title = self.label(nav, "लोड हुँदैछ…", 13, self.theme["fg"], True)
         self.month_title.pack(side="left", padx=14)
-        self.button(nav, "Next month ▶", lambda: self.change_calendar_month(1)).pack(side="left")
+        self.button(nav, "अर्को महिना ▶", lambda: self.change_calendar_month(1)).pack(side="left")
         self.button(nav, "Refresh", lambda: self.load_calendar(force=True)).pack(side="right")
 
-        self.calendar_list = tk.Listbox(self.page_host, height=16, bg=self.theme["panel"],
-                                        fg=self.theme["fg"], selectbackground=self.theme["accent"],
-                                        selectforeground="#111827", relief="flat",
-                                        font=("Segoe UI", 10), activestyle="none")
-        self.calendar_list.pack(fill="both", expand=True, pady=8)
+        self.calendar_grid = tk.Frame(self.page_host, bg=self.theme["bg"])
+        self.calendar_grid.pack(fill="both", expand=True, pady=6)
+        self.calendar_cells = tk.Frame(self.calendar_grid, bg=self.theme["bg"])
+        self.calendar_cells.pack(fill="both", expand=True)
+        self.calendar_weekdays = ["आइत", "सोम", "मंगल", "बुध", "बिही", "शुक्र", "शनि"]
+        self.calendar_cell_frames = {}
+        self.calendar_days_by_ad = {}
+        self.selected_calendar_ad = None
+
         row = tk.Frame(self.page_host, bg=self.theme["bg"])
         row.pack(fill="x")
-        self.button(row, "Mark selected date as school closed", self.add_calendar_closure,
-                    primary=True).pack(side="left")
-        self.button(row, "Remove selected manual closure", self.remove_calendar_closure).pack(side="left", padx=8)
-        link = tk.Label(self.page_host, text="Calendar data by Trisambat • Open website",
-                        bg=self.theme["bg"], fg=self.theme["accent"], cursor="hand2",
-                        font=("Segoe UI", 9, "underline"))
-        link.pack(anchor="w", pady=(8, 0))
-        link.bind("<Button-1>", lambda _e: webbrowser.open(TRISAMBAT + "/developers?lang=en"))
+        self.button(
+            row, "चयनित दिनलाई स्कूल बिदा बनाउनुहोस्",
+            self.add_calendar_closure, primary=True
+        ).pack(side="left")
+        self.button(row, "आफैं राखेको बिदा हटाउनुहोस्",
+                    self.remove_calendar_closure).pack(side="left", padx=8)
+        link = tk.Label(
+            self.page_host, text="Calendar data by Trisambat • पात्रो खोल्नुहोस्",
+            bg=self.theme["bg"], fg=self.theme["accent"], cursor="hand2",
+            font=("Segoe UI", 9, "underline")
+        )
+        link.pack(anchor="w", pady=(6, 0))
+        link.bind("<Button-1>", lambda _e: webbrowser.open(TRISAMBAT + "/developers?lang=ne"))
         self.load_calendar()
 
     def change_calendar_month(self, offset):
-        first = self.calendar_month
-        month_index = first.month - 1 + offset
-        year = first.year + month_index // 12
-        month = month_index % 12 + 1
-        self.calendar_month = date(year, month, 1)
-        self.month_title.config(text=self.calendar_month.strftime("%B %Y"))
+        if self.calendar_bs_year is None or self.calendar_bs_month is None:
+            return
+        month_index = self.calendar_bs_month - 1 + offset
+        self.calendar_bs_year += month_index // 12
+        self.calendar_bs_month = month_index % 12 + 1
+        DATA["calendar_view_bs"] = {
+            "year": self.calendar_bs_year,
+            "month": self.calendar_bs_month,
+        }
+        save_data()
+        self.month_title.config(
+            text=f"{NEPALI_MONTHS[self.calendar_bs_month]} {self.nepali_digits(self.calendar_bs_year)}"
+        )
         self.load_calendar()
 
     def load_calendar(self, force=False):
         if self.calendar_loading:
             return
         self.calendar_loading = True
-        self.calendar_status.config(text="Fetching calendar data…")
-        month = self.calendar_month
-        key = f"ad_{month.year}_{month.month:02d}"
-        url = f"{TRISAMBAT_API}/ad/{month.year}/{month.month:02d}.json"
+        self.calendar_status.config(text="नेपाली पात्रोको विवरण ल्याउँदै…")
+        saved = DATA.get("calendar_view_bs", {})
+        if self.calendar_bs_year is None:
+            self.calendar_bs_year = saved.get("year")
+            self.calendar_bs_month = saved.get("month")
+
         def worker():
-            data_month = None if force else self.load_cached_json(key, None)
-            if data_month is None:
-                data_month = self.load_cached_json(key, url)
-            today_data = self.load_cached_json("today_" + day_key(),
-                                               TRISAMBAT_API + "/today.json")
-            self.after(0, lambda: self.calendar_loaded(data_month, today_data))
+            today_data = self.load_cached_json(
+                "today_" + day_key(), TRISAMBAT_API + "/today.json"
+            )
+            year = self.calendar_bs_year
+            month = self.calendar_bs_month
+            if year is None or month is None:
+                bs = (today_data or {}).get("bs", {})
+                if not bs.get("year") or not bs.get("month"):
+                    self.after(0, lambda: self.calendar_load_failed(today_data))
+                    return
+                year, month = bs["year"], bs["month"]
+                self.after(0, lambda: self.calendar_set_initial_month(year, month, today_data, force))
+                return
+            key = f"bs_{year}_{month:02d}"
+            url = f"{TRISAMBAT_API}/bs/{year}/{month:02d}.json"
+            month_data = None if force else self.load_cached_json(key, None)
+            if month_data is None:
+                month_data = self.load_cached_json(key, url)
+            self.after(0, lambda: self.calendar_loaded(month_data, today_data, year, month))
+
         threading.Thread(target=worker, daemon=True).start()
 
-    def calendar_loaded(self, month_data, today_data):
+    def calendar_set_initial_month(self, year, month, today_data, force=False):
         self.calendar_loading = False
-        self.calendar_list.delete(0, "end")
-        self.month_days = []
-        today_label = ""
+        self.calendar_bs_year = year
+        self.calendar_bs_month = month
+        DATA["calendar_view_bs"] = {"year": year, "month": month}
+        save_data()
+        self.month_title.config(text=f"{NEPALI_MONTHS.get(month, 'BS')} {self.nepali_digits(year)}")
+        self.load_calendar(force=force)
+
+    def calendar_load_failed(self, today_data):
+        self.calendar_loading = False
+        self.calendar_status.config(
+            text="इन्टरनेट छैन वा पात्रो डेटा उपलब्ध छैन। इन्टरनेट जडान गरेर Refresh गर्नुहोस्।"
+        )
         if today_data:
-            today_label = today_data.get("text", {}).get("bs", {}).get("en", "")
-            events = today_data.get("events", []) or []
-            event_names = [self.event_name(e) for e in events]
-            holiday_text = " • Public holiday" if today_data.get("holiday") else ""
-            self.calendar_status.config(text=f"Today: {today_label}{holiday_text}")
-        else:
-            self.calendar_status.config(text="Calendar unavailable — showing cached data when possible.")
+            self.calendar_status.config(
+                text="आज: " + today_data.get("text", {}).get("bs", {}).get("ne", "BS date unavailable")
+            )
+
+    def calendar_loaded(self, month_data, today_data, year, month):
+        self.calendar_loading = False
+        for widget in self.calendar_cells.winfo_children():
+            widget.destroy()
+        self.calendar_cell_frames = {}
+        self.calendar_days_by_ad = {}
         days = (month_data or {}).get("days", [])
-        for item in days:
+        self.month_days = []
+        self.selected_calendar_ad = None
+        month_name = NEPALI_MONTHS.get(month, f"BS {month}")
+        self.month_title.config(text=f"{month_name} {self.nepali_digits(year)}")
+        if today_data:
+            today_text = today_data.get("text", {}).get("bs", {}).get("ne", "")
+            self.calendar_status.config(text=f"आज: {today_text}" if today_text else "नेपाली पात्रो")
+        else:
+            self.calendar_status.config(text="क्यास गरिएको पात्रो देखाइँदैछ।")
+
+        for column, weekday in enumerate(self.calendar_weekdays):
+            label = tk.Label(
+                self.calendar_cells, text=weekday, bg=self.theme["panel"],
+                fg=self.theme["accent"], font=("Nirmala UI", 9, "bold"), pady=4
+            )
+            label.grid(row=0, column=column, sticky="nsew", padx=1, pady=1)
+            self.calendar_cells.grid_columnconfigure(column, weight=1, uniform="calendar")
+
+        if not days:
+            tk.Label(
+                self.calendar_cells, text="यो महिनाको डेटा भेटिएन। Refresh गर्नुहोस्।",
+                bg=self.theme["bg"], fg=self.theme["muted"], font=("Nirmala UI", 10)
+            ).grid(row=1, column=0, columnspan=7, sticky="w", padx=8, pady=12)
+            return
+
+        first_weekday = days[0].get("weekday", 0) if days else 0
+        for index, item in enumerate(days):
+            bs = item.get("bs", {}) or {}
+            bs_day = bs.get("day", index + 1)
             ad = item.get("ad", "")
-            bs = item.get("text", {}).get("bs", {}).get("en", "")
-            weekday_num = item.get("weekday", -1)
-            weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][weekday_num] if 0 <= weekday_num <= 6 else ""
+            weekday_index = item.get("weekday", 0)
+            col = weekday_index if 0 <= weekday_index <= 6 else index % 7
+            row = (first_weekday + index) // 7 + 1
             events = item.get("events", []) or []
-            names = [self.event_name(e) for e in events]
-            national = any(isinstance(e, dict) and e.get("holiday") == "national" and e.get("verified") for e in events)
-            if national and ad and ad not in DATA.setdefault("api_school_holidays", []):
-                DATA["api_school_holidays"].append(ad)
-            is_sat_sun = False
+            names = [self.event_name(event, "ne") for event in events]
+            tithi = (item.get("text", {}).get("tithi", {}) or {}).get("ne", "")
+            is_holiday = bool(item.get("holiday")) or any(
+                isinstance(event, dict)
+                and event.get("holiday") == "national"
+                and event.get("verified")
+                for event in events
+            )
+            is_today = ad == date.today().isoformat()
+            bg = self.theme["panel2"] if is_today else self.theme["panel"]
+            fg = "#ff8d8d" if is_holiday or weekday_index == 6 else self.theme["fg"]
+            frame = tk.Frame(
+                self.calendar_cells, bg=bg, height=70,
+                highlightbackground=self.theme["accent"] if is_today else self.theme["border"],
+                highlightthickness=2 if is_today else 1
+            )
+            frame.grid(row=row, column=col, sticky="nsew", padx=1, pady=1)
+            frame.grid_propagate(False)
+            bs_label = self.nepali_digits(bs_day)
+            ad_label = ""
             try:
-                is_sat_sun = date.fromisoformat(ad).weekday() >= 5
+                ad_label = date.fromisoformat(ad).strftime("%d %b")
             except ValueError:
                 pass
-            status = "School closure" if national else ("Weekend" if is_sat_sun else "")
-            if ad in DATA.get("school_closures", []):
-                status = "Your school closure"
-            line = f"{ad}   |   {weekday:<3}   |   {bs}"
-            if names:
-                line += "   |   " + ", ".join(names)
-            if status:
-                line += "   |   [" + status + "]"
-            self.calendar_list.insert("end", line)
+            title = tk.Label(
+                frame, text=f"{bs_label}   {ad_label}", bg=bg, fg=fg,
+                font=("Nirmala UI", 10, "bold"), anchor="w"
+            )
+            title.pack(fill="x", padx=4, pady=(2, 0))
+            detail_parts = [part for part in [tithi, names[0] if names else ""] if part]
+            if is_holiday and not names:
+                detail_parts.append("बिदा")
+            detail = "\n".join(detail_parts)
+            sub = tk.Label(
+                frame, text=detail, bg=bg, fg=self.theme["muted"],
+                font=("Nirmala UI", 8), anchor="w", justify="left", wraplength=92
+            )
+            sub.pack(fill="x", padx=4)
             self.month_days.append(ad)
-        if not days:
-            self.calendar_list.insert("end", "No month data returned. Check your internet connection.")
-        save_data()
+            self.calendar_days_by_ad[ad] = item
+            self.calendar_cell_frames[ad] = frame
+            for widget in (frame, title, sub):
+                widget.bind("<Button-1>", lambda _e, selected=ad: self.select_calendar_date(selected))
+            self.calendar_cells.grid_rowconfigure(row, weight=1, minsize=72)
 
     @staticmethod
-    def event_name(event):
+    def nepali_digits(value):
+        table = str.maketrans("0123456789", "०१२३४५६७८९")
+        return str(value).translate(table)
+
+    def select_calendar_date(self, ad):
+        self.selected_calendar_ad = ad
+        item = self.calendar_days_by_ad.get(ad, {})
+        bs_text = item.get("text", {}).get("bs", {}).get("ne", "")
+        tithi = (item.get("text", {}).get("tithi", {}) or {}).get("ne", "")
+        events = [self.event_name(event, "ne") for event in item.get("events", []) or []]
+        details = " • ".join(part for part in [bs_text, tithi, ", ".join(events)] if part)
+        if not details:
+            details = ad
+        self.calendar_status.config(text=f"चयनित: {details}")
+        for saved_ad, frame in self.calendar_cell_frames.items():
+            frame.configure(
+                highlightbackground=self.theme["accent"] if saved_ad == ad else self.theme["border"],
+                highlightthickness=2 if saved_ad == ad else 1
+            )
+
+    @staticmethod
+    def event_name(event, language="ne"):
         if isinstance(event, str):
             return event
         if isinstance(event, dict):
-            return (event.get("name") or event.get("title") or
-                    event.get("text", {}).get("en") or event.get("name_en") or "Calendar event")
-        return "Calendar event"
+            text = event.get("text", {})
+            if isinstance(text, dict):
+                localized = text.get(language) or text.get("en")
+            else:
+                localized = None
+            return (localized or event.get("name_np") or event.get("name_ne")
+                    or event.get("name") or event.get("title")
+                    or event.get("name_en") or "पर्व/कार्यक्रम")
+        return "पर्व/कार्यक्रम"
 
     def selected_calendar_date(self):
-        selection = self.calendar_list.curselection()
-        if not selection:
-            return None
-        index = selection[0]
-        return self.month_days[index] if 0 <= index < len(self.month_days) else None
+        return self.selected_calendar_ad
 
     def add_calendar_closure(self):
         selected = self.selected_calendar_date()
