@@ -32,7 +32,7 @@ jobs:
 
       - name: Build Windows EXE
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name DailyFit --collect-all winotify --collect-all nepdate --collect-all nepdate_patro --add-data "THIRD_PARTY_NOTICES.md;." dailyfit.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name DailyFit --icon DailyFit.ico --collect-all winotify --collect-all pystray --collect-all PIL --collect-all nepdate --collect-all nepdate_patro --add-data "DailyFit.ico;." --add-data "DailyFit.png;." --add-data "THIRD_PARTY_NOTICES.md;." --add-data "COPYING.LGPL;." --add-data "PILLOW-LICENSE.txt;." dailyfit.py
 
       - name: Create SHA-256 checksum
         shell: pwsh
