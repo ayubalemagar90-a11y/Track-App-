@@ -7,6 +7,8 @@ DailyFit is a free Windows routine, study, calendar, and personal-tracking app. 
 - Offline Bikram Sambat month, week, and day calendar views with matching Gregorian dates, Nepali or English labels, tithi, festivals, and holiday markers.
 - Personal calendar events with descriptions, all-day or timed entries, recurrence, reminders, and school-closure or one-day timetable overrides.
 - Separate suggested routines for school, home, weekends, and holidays. Edit, copy, restore, add durations, mark sessions complete, or skip and move an activity for today.
+- Dashboard shows the current and next timetable items, with a spoken Windows voice and sound alert five minutes before each scheduled start. Closing the window keeps DailyFit in the notification area; its tray menu can reopen or quit the app.
+- Uses the supplied logo for the app window, notification-area icon, and Windows EXE file icon.
 - Task lists with subjects, priorities, due dates, exam countdowns, subtasks, status, search, filters, and local reminders.
 - Daily and weekly goals, habit tracking, repeat days, completion history, streaks, and weekly summaries.
 - Daily counter history with date navigation and per-counter totals for the selected day, previous 7 days, month-to-date, and all saved time.
@@ -35,8 +37,10 @@ py dailyfit.py
 To build a local Windows EXE:
 
 ```powershell
-py -m PyInstaller --noconfirm --clean --onefile --windowed --name DailyFit --collect-all winotify --collect-all nepdate --collect-all nepdate_patro --add-data "THIRD_PARTY_NOTICES.md;." dailyfit.py
+py -m PyInstaller --noconfirm --clean --onefile --windowed --name DailyFit --icon DailyFit.ico --collect-all winotify --collect-all pystray --collect-all PIL --collect-all nepdate --collect-all nepdate_patro --add-data "DailyFit.ico;." --add-data "DailyFit.png;." --add-data "THIRD_PARTY_NOTICES.md;." --add-data "COPYING.LGPL;." --add-data "PILLOW-LICENSE.txt;." dailyfit.py
 ```
+
+The published Windows release is a single EXE and does not require Python to be installed. Period voice alerts use the Windows speech voice and follow the app's reminder and quiet-hours settings.
 
 ## GitHub release builds and app updates
 

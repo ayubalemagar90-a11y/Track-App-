@@ -304,16 +304,31 @@ def version_tuple(value):
     nums = re.findall(r"\d+", str(value))
     return tuple(int(x) for x in nums[:4]) or (0,)
 
+def resource_path(name):
+    """Return a bundled asset path in source runs and PyInstaller builds."""
+    bundle_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return bundle_dir / name
+
 class DailyFit(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"DailyFit  •  v{APP_VERSION}")
+        try:
+            app_icon = str(resource_path("DailyFit.ico"))
+            self.iconbitmap(app_icon)
+            self.iconbitmap(default=app_icon)
+        except tk.TclError:
+            pass
         self.geometry(DATA.get("window_geometry") or "1060x740")
         self.minsize(800, 590)
-        self.protocol("WM_DELETE_WINDOW", self.minimize_to_taskbar)
+        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self.current_page = "Dashboard"
         self.notes_dirty = False
         self.schedule_dirty = False
+        self.tray_icon = None
+        self.tray_ready = False
+        self._closing_app = False
+        self.dashboard_period_timer = None
         self.current_schedule_type = "weekday_schedule"
         self.schedule_editor = None
         saved_calendar_month = DATA.get("calendar_view_bs", {})
@@ -332,6 +347,7 @@ class DailyFit(tk.Tk):
         self.theme = THEMES.get(DATA.get("theme"), THEMES["Purple"])
         self._build_shell()
         self.show_page("Dashboard")
+        self.after(100, self.start_tray_icon)
         self.after(5000, self.reminder_tick)
         self.after(12000, lambda: self.check_for_updates(silent=True, automatic=True))
         if DATA.get("pending_release_notes"):
@@ -343,7 +359,7 @@ class DailyFit(tk.Tk):
         self.bind_all("<Alt-Right>", lambda _e: self.calendar_keyboard_move(1), add="+")
         self.bind_all("<Alt-Home>", lambda _e: self.calendar_today() if self.current_page == "Calendar" else None, add="+")
         if "--background" in sys.argv:
-            self.after(700, self.iconify)
+            self.after(700, self.hide_to_tray)
 
     def _build_shell(self):
         self.configure(bg=self.theme["bg"])
@@ -472,6 +488,12 @@ class DailyFit(tk.Tk):
                     return
             else:
                 self.schedule_dirty = False
+        if self.dashboard_period_timer is not None:
+            try:
+                self.after_cancel(self.dashboard_period_timer)
+            except tk.TclError:
+                pass
+            self.dashboard_period_timer = None
         self.current_page = page
         self.header_title.config(text=page)
         self.header_date.config(text=datetime.now().strftime("%A, %d %B %Y"))
@@ -565,11 +587,15 @@ class DailyFit(tk.Tk):
                         lambda k=mode_key, t=clock, a=activity: self.skip_or_reschedule(k, t, a)).pack(side="right", padx=2)
         self.button(inner, "Edit timetable", lambda: self.show_page("Timetable")).pack(anchor="e", pady=(8, 0))
 
-        current = [(clock, activity) for clock, activity in schedule if clock <= now_text]
-        if current:
-            _, current_inner = self.card(self.page_host)
-            self.label(current_inner, "CURRENT / MOST RECENT SESSION", 9, self.theme["muted"], True).pack(anchor="w")
-            self.label(current_inner, f"{self.display_clock(current[-1][0])}  •  {current[-1][1]}", 11, self.theme["fg"], True).pack(anchor="w", pady=3)
+        _, period_inner = self.card(self.page_host)
+        self.label(period_inner, "NOW AND NEXT PERIOD", 9, self.theme["muted"], True).pack(anchor="w")
+        self.label(period_inner, "CURRENT PERIOD", 9, self.theme["accent"], True).pack(anchor="w", pady=(8, 0))
+        self.dashboard_current_period = self.label(period_inner, "Checking timetable…", 11, self.theme["fg"], True)
+        self.dashboard_current_period.pack(anchor="w", pady=(2, 4))
+        self.label(period_inner, "NEXT PERIOD", 9, self.theme["accent"], True).pack(anchor="w", pady=(5, 0))
+        self.dashboard_next_period = self.label(period_inner, "Checking timetable…", 11, self.theme["fg"], True)
+        self.dashboard_next_period.pack(anchor="w", pady=(2, 4))
+        self.refresh_dashboard_periods()
 
         # Nepali date strip
         _, inner = self.card(self.page_host)
@@ -583,6 +609,46 @@ class DailyFit(tk.Tk):
             self.label(inner, "Install the free NepDate calendar package to show BS dates.",
                        10, self.theme["muted"]).pack(anchor="w", pady=4)
         self.button(inner, "Open Nepali calendar", lambda: self.show_page("Calendar")).pack(anchor="e")
+
+    def refresh_dashboard_periods(self):
+        if self.current_page != "Dashboard":
+            return
+        try:
+            if not self.dashboard_current_period.winfo_exists():
+                return
+            now = datetime.now()
+            mode_key, _mode_title = self.active_mode()
+            schedule = self.get_schedule(mode_key)
+            current_minute = now.hour * 60 + now.minute
+            current = None
+            following = None
+            for clock, activity in schedule:
+                start_minute = int(clock[:2]) * 60 + int(clock[3:5])
+                if start_minute <= current_minute:
+                    current = (clock, activity)
+                elif following is None:
+                    following = (clock, activity)
+
+            if current:
+                self.dashboard_current_period.config(
+                    text=f"{self.display_clock(current[0])}  •  {current[1]}"
+                )
+            else:
+                self.dashboard_current_period.config(text="No scheduled period is happening now.")
+
+            if following:
+                next_start = now.replace(
+                    hour=int(following[0][:2]), minute=int(following[0][3:5]), second=0, microsecond=0
+                )
+                minutes_until = max(1, int(((next_start - now).total_seconds() + 59) // 60))
+                self.dashboard_next_period.config(
+                    text=f"{self.display_clock(following[0])}  •  {following[1]}  (in {minutes_until} min)"
+                )
+            else:
+                self.dashboard_next_period.config(text="No more periods scheduled today.")
+        except (AttributeError, tk.TclError, ValueError, TypeError):
+            return
+        self.dashboard_period_timer = self.after(30000, self.refresh_dashboard_periods)
 
     def first_run_setup(self):
         messagebox.showinfo("DailyFit quick setup",
@@ -2485,6 +2551,12 @@ class DailyFit(tk.Tk):
         except OSError as exc:
             messagebox.showerror("Notices unavailable", str(exc), parent=self)
             return
+        for license_name in ("COPYING.LGPL", "PILLOW-LICENSE.txt"):
+            try:
+                license_text = (bundle_dir / license_name).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            content += f"\n\n{'=' * 72}\n\n{license_name}\n\n{license_text}"
         window = tk.Toplevel(self)
         window.title(f"DailyFit v{APP_VERSION} • Open-source notices")
         window.configure(bg=self.theme["bg"])
@@ -2547,12 +2619,54 @@ class DailyFit(tk.Tk):
         except OSError as exc:
             messagebox.showerror("Startup error", str(exc), parent=self)
 
-    def minimize_to_taskbar(self):
+    def start_tray_icon(self):
+        try:
+            import pystray
+            from PIL import Image
+            with Image.open(resource_path("DailyFit.png")) as logo:
+                icon_image = logo.convert("RGBA")
+            menu = pystray.Menu(
+                pystray.MenuItem("Open DailyFit", self._open_from_tray, default=True),
+                pystray.MenuItem("Quit DailyFit", self._quit_from_tray),
+            )
+            self.tray_icon = pystray.Icon("DailyFit", icon_image, "DailyFit", menu)
+            self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+            self.tray_thread.start()
+            self.tray_ready = True
+        except Exception as exc:
+            self.tray_icon = None
+            self.tray_ready = False
+            self.tray_error = str(exc)
+
+    def _open_from_tray(self, _icon, _item):
+        try:
+            self.after(0, self.restore_from_tray)
+        except tk.TclError:
+            pass
+
+    def _quit_from_tray(self, _icon, _item):
+        if self._closing_app:
+            return
+        try:
+            self.after(0, lambda: self.exit_app(confirm=False))
+        except tk.TclError:
+            pass
+
+    def restore_from_tray(self):
+        try:
+            self.deiconify()
+            self.state("normal")
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            pass
+
+    def hide_to_tray(self):
         if self.notes_dirty or self.schedule_dirty:
             if not messagebox.askyesno("Unsaved changes", "Save your open note or timetable before hiding DailyFit?", parent=self):
-                # Keep the editor open in memory while the app is minimized.
+                # Keep unsaved edits in memory while DailyFit stays open in the tray.
                 self._save_window_geometry()
-                self.iconify()
+                self._hide_main_window()
                 return
             if self.current_page == "Notes" and self.notes_dirty:
                 self.save_notes()
@@ -2563,7 +2677,19 @@ class DailyFit(tk.Tk):
                 if self.schedule_dirty:
                     return
         self._save_window_geometry()
-        self.iconify()
+        self._hide_main_window()
+
+    def _hide_main_window(self):
+        if self.tray_ready:
+            self.withdraw()
+        else:
+            # Leave a taskbar button available if the notification-area icon could not start.
+            self.iconify()
+            messagebox.showwarning(
+                "Tray icon unavailable",
+                "DailyFit could not start its notification-area icon, so it remains on the taskbar.",
+                parent=self,
+            )
 
     def _save_window_geometry(self):
         try:
@@ -2572,10 +2698,12 @@ class DailyFit(tk.Tk):
         except tk.TclError:
             pass
 
-    def exit_app(self):
-        if not messagebox.askyesno("Exit DailyFit", "Exit completely? Timetable reminders will stop until reopened.", parent=self):
+    def exit_app(self, confirm=True):
+        if confirm and not messagebox.askyesno("Exit DailyFit", "Exit completely? Timetable reminders will stop until reopened.", parent=self):
             return
         if self.notes_dirty or self.schedule_dirty:
+            if self.state() == "withdrawn":
+                self.restore_from_tray()
             choice = messagebox.askyesnocancel("Unsaved changes", "Save your open note or timetable before exiting?", parent=self)
             if choice is None:
                 return
@@ -2589,16 +2717,23 @@ class DailyFit(tk.Tk):
                     if self.schedule_dirty:
                         return
         self._save_window_geometry()
+        self._closing_app = True
+        if self.tray_icon and self.tray_ready:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
         self.destroy()
 
-    def show_notification(self, title, message):
+    def show_notification(self, title, message, sound=True):
         try:
             from winotify import Notification, audio
             toast = Notification(app_id="DailyFit", title=title, msg=message, duration="short")
-            try:
-                toast.set_audio(audio.Default, loop=False)
-            except Exception:
-                pass
+            if sound:
+                try:
+                    toast.set_audio(audio.Default, loop=False)
+                except Exception:
+                    pass
             toast.show()
         except Exception:
             try:
@@ -2619,15 +2754,46 @@ class DailyFit(tk.Tk):
             except tk.TclError:
                 pass
 
+    def announce_period_soon(self, activity):
+        message = f"{activity} begins in 5 minutes. Be ready."
+        self.show_notification("DailyFit • Period in 5 minutes", message, sound=False)
+        try:
+            import winsound
+            winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except (ImportError, RuntimeError):
+            try:
+                self.bell()
+            except tk.TclError:
+                pass
+        try:
+            spoken_activity = re.sub(r"\s+", " ", str(activity)).strip()[:80]
+            spoken_text = f"{spoken_activity}. It begins in five minutes. Be ready."
+            powershell_text = spoken_text.replace("'", "''")
+            command = (
+                "$voice = New-Object -ComObject SAPI.SpVoice; "
+                f"$voice.Speak('{powershell_text}') | Out-Null"
+            )
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", command],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, ValueError):
+            pass
+
     def reminder_tick(self):
         try:
             now = datetime.now()
             if DATA.get("reminders_enabled", True) and not self.is_quiet_now(now):
                 current = now.strftime("%H:%M")
+                five_minute_clock = (now + timedelta(minutes=5)).strftime("%H:%M")
                 key, _title = self.active_mode()
                 schedule = self.get_schedule(key)
                 for clock, activity in schedule:
                     event_id = f"{now.date().isoformat()}_{key}_{clock}"
+                    if clock == five_minute_clock and f"{event_id}_5m" not in self.reminded:
+                        self.reminded.add(f"{event_id}_5m")
+                        self.announce_period_soon(activity)
                     if clock == current and event_id not in self.reminded:
                         self.reminded.add(event_id)
                         self.show_notification("DailyFit • Next session", f"Your next session: {activity}")
