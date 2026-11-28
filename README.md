@@ -9,6 +9,7 @@ DailyFit is a free Windows routine, study, calendar, and personal-tracking app. 
 - Separate suggested routines for school, home, weekends, and holidays. Edit, copy, restore, add durations, mark sessions complete, or skip and move an activity for today.
 - Task lists with subjects, priorities, due dates, exam countdowns, subtasks, status, search, filters, and local reminders.
 - Daily and weekly goals, habit tracking, repeat days, completion history, streaks, and weekly summaries.
+- Daily counter history with date navigation and per-counter totals for the selected day, previous 7 days, month-to-date, and all saved time.
 - Optional study timer, rest timer, movement log and reminder, mood check-in, reflection, sleep-time notes, and user-controlled water or screen-break reminders.
 - Searchable notes with dates, categories, tags, due dates, pinning, bold/italic Markdown shortcuts, duplicates, and archive/restore.
 - Dark, light, and ocean themes; 12/24-hour display; configurable week start; quiet hours; and Windows startup option.

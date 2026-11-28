@@ -357,7 +357,7 @@ class DailyFit(tk.Tk):
         self.nav_buttons = {}
         for name, symbol in [
             ("Dashboard", "⌂"), ("Timetable", "▦"), ("Tasks", "✓"),
-            ("Habits", "★"), ("Trainer", "◉"), ("Calendar", "▣"),
+            ("Habits", "★"), ("History", "◷"), ("Trainer", "◉"), ("Calendar", "▣"),
             ("Notes", "✎"), ("Settings", "⚙")
         ]:
             b = tk.Button(self.sidebar, text=f"  {symbol}   {name}", anchor="w",
@@ -806,6 +806,138 @@ class DailyFit(tk.Tk):
             return parsed.strftime("%I:%M %p").lstrip("0") if DATA.get("time_format") == "12h" else value
         except ValueError:
             return value
+
+    def page_history(self):
+        self.label(
+            self.page_host,
+            "Review saved counter totals by day, for the last 7 days, month-to-date, and all time.",
+            10, self.theme["muted"], wraplength=760
+        ).pack(anchor="w", pady=(0, 8))
+
+        controls = tk.Frame(self.page_host, bg=self.theme["bg"])
+        controls.pack(fill="x", pady=5)
+        self.button(controls, "◀ Previous day", lambda: self.change_history_date(-1)).pack(side="left", padx=(0, 4))
+        self.history_date_var = tk.StringVar(value=date.today().isoformat())
+        self.history_date_entry = tk.Entry(
+            controls, textvariable=self.history_date_var, width=12,
+            bg=self.theme["panel"], fg=self.theme["fg"], insertbackground=self.theme["fg"], relief="flat"
+        )
+        self.history_date_entry.pack(side="left", padx=4, ipady=6)
+        self.history_date_entry.bind("<Return>", lambda _event: self.refresh_history())
+        self.button(controls, "Show date", self.refresh_history, primary=True).pack(side="left", padx=4)
+        self.button(controls, "Today", self.history_today).pack(side="left", padx=4)
+        self.button(controls, "Next day ▶", lambda: self.change_history_date(1)).pack(side="left", padx=4)
+
+        self.history_status = self.label(self.page_host, "", 10, self.theme["muted"])
+        self.history_status.pack(anchor="w", pady=(4, 2))
+        self.history_tree = ttk.Treeview(
+            self.page_host,
+            columns=("selected_day", "last_7", "month_to_date", "all_time"),
+            show="tree headings", height=14, selectmode="browse"
+        )
+        self.history_tree.heading("#0", text="Counter")
+        self.history_tree.column("#0", width=210, anchor="w")
+        for column, title, width in (
+            ("selected_day", "Selected day", 120),
+            ("last_7", "7 days through date", 150),
+            ("month_to_date", "Month through date", 150),
+            ("all_time", "All time", 120),
+        ):
+            self.history_tree.heading(column, text=title)
+            self.history_tree.column(column, width=width, anchor="e")
+        self.history_tree.pack(fill="both", expand=True, pady=6)
+        self.label(
+            self.page_host,
+            "Totals are shown separately for each counter because they can use different units (for example, repetitions and mL).",
+            9, self.theme["muted"], wraplength=760
+        ).pack(anchor="w", pady=(2, 8))
+        self.refresh_history()
+
+    def history_today(self):
+        self.history_date_var.set(date.today().isoformat())
+        self.refresh_history()
+
+    def change_history_date(self, offset):
+        try:
+            selected = date.fromisoformat(self.history_date_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Date format", "Enter a date as YYYY-MM-DD first.", parent=self)
+            return
+        self.history_date_var.set((selected + timedelta(days=offset)).isoformat())
+        self.refresh_history()
+
+    @staticmethod
+    def counter_value(value):
+        try:
+            return max(0, int(value))
+        except (ValueError, TypeError, OverflowError):
+            return 0
+
+    def refresh_history(self):
+        if not hasattr(self, "history_tree") or not self.history_tree.winfo_exists():
+            return
+        try:
+            selected = date.fromisoformat(self.history_date_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Date format", "Enter a date as YYYY-MM-DD.", parent=self)
+            return
+
+        self.history_date_var.set(selected.isoformat())
+        for row in self.history_tree.get_children():
+            self.history_tree.delete(row)
+
+        raw_counts = DATA.get("counts", {})
+        if not isinstance(raw_counts, dict):
+            raw_counts = {}
+        records = []
+        for raw_day, values in raw_counts.items():
+            if not isinstance(values, dict):
+                continue
+            try:
+                record_day = date.fromisoformat(str(raw_day))
+            except ValueError:
+                continue
+            records.append((record_day, values))
+
+        activity_names = [
+            str(name).strip() for name in DATA.get("activities", [])
+            if str(name).strip()
+        ]
+        historical_names = {
+            str(name).strip() for _record_day, values in records for name in values
+            if str(name).strip()
+        }
+        names = activity_names + sorted(historical_names - set(activity_names), key=str.casefold)
+
+        selected_values = next(
+            (values for record_day, values in records if record_day == selected), {}
+        )
+        seven_day_start = selected - timedelta(days=6)
+        month_start = selected.replace(day=1)
+        for name in names:
+            selected_total = self.counter_value(selected_values.get(name, 0))
+            seven_day_total = sum(
+                self.counter_value(values.get(name, 0))
+                for record_day, values in records
+                if seven_day_start <= record_day <= selected
+            )
+            month_total = sum(
+                self.counter_value(values.get(name, 0))
+                for record_day, values in records
+                if month_start <= record_day <= selected
+            )
+            all_time_total = sum(
+                self.counter_value(values.get(name, 0)) for _record_day, values in records
+            )
+            self.history_tree.insert(
+                "", "end", text=name,
+                values=(selected_total, seven_day_total, month_total, all_time_total)
+            )
+
+        if selected_values:
+            self.history_status.config(text=f"Counter totals for {selected.isoformat()}")
+        else:
+            self.history_status.config(text=f"No counter entries saved for {selected.isoformat()}; showing 0 for that day.")
 
     def page_tasks(self):
         self.label(self.page_host, "Homework, study plans, exam dates, and small daily goals stay on this computer.",
